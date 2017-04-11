@@ -1,0 +1,244 @@
+---
+title: "NightClub"
+author: "Analysis"
+date: "12 Þubat 2018"
+output: word_document
+---
+
+###Kullanýlan Paketler
+```{r}
+library(tidyr)
+library(dplyr)
+library(reshape)
+library(reshape2)
+```
+
+## Veriyi yukleyip Temizleme:
+#####Öncelikle toplanan veri hangi formatta toplanmýþ bizim bu formatý yükleyebilecegimiz kutuphanelerimiz var mý buna bakmamýz gerekiyor. Veriyi yukledikten sonra elimizde hangi bilgiler var bunlarý incelememiz gerekiyor. Sonrasýnda elimizde eksik veri var mý? Boþ deðerler var mý? Buyuk bosluklar var mý bunlarý kontrol etmemiz gerekiyor.
+
+#### Günler kiþiler ve doðum günlerinin olduðu datayý "visitor", hýrsýzlýk yapýlan günlerin oldugu datayý "dates" olarak kaydettim. 
+```{r}
+dates= read.csv("C:/Users/sasla/Desktop/Kocsistem/theft_log.csv", header = FALSE); 
+visitor= read.csv("C:/Users/sasla/Desktop/Kocsistem/visitor_log.csv");
+```
+
+#####Eksik data var mý kontrol ettim. 
+```{r pressure, echo=FALSE}
+sapply(visitor,function(x) sum(is.null(x)))
+sapply(visitor,function(x) sum(is.na(x)))
+#summary
+summary(visitor)
+summary(dates)
+```
+
+#####Faktör olarak yuklenen gün deðiþkenlerini rahat iþlem yapabilmek için Date tipine çevirdim.
+```{r}
+visitor$visit_date<-as.Date(visitor$visit_date)
+dates$V1<-as.Date(dates$V1)
+```
+
+#####Elimizdeki veriyi tanýmak için toplam kaç gün var elimizde, kaç hýrsýzlýk yapýlan gün var. Eksik günler var mý? Bunlarý kontrol ettim.
+```{r}
+#Kac isim var.
+length(unique((visitor$name)))
+
+# Elimizdeki veride gunlerin baþlangýç bitiþ tarihleri
+max(visitor$visit_date)
+#[1] "2017-01-01"
+min(visitor$visit_date)
+#[1] "2016-06-16"
+
+#toplam gün sayýsý
+length(unique(visitor$visit_date))
+#200
+#eksik gün var mý diye kontrol etmek için seq() fonksiyonunu kullanýyorum. 
+#Ardýþýk baþlangýc ve bitis tarihi aralýðýnda seri oluþturursak toplam sayý yine 200 çýkýyor.
+#yani arada eksik gün yok demek oluyor.
+length(seq(as.Date("2016-06-16"),as.Date("2017-01-01"),by = 1))
+
+# Toplam hýrsýzlýk yapýlan gunlerin baþlangýç bitiþ tarihleri
+max(dates$V1)
+#[1] "2017-01-01"
+min(dates$V1)
+#[1] "2016-06-17"
+```
+
+#####"visitor"  verisiyle hýrsýzlýk yapýlan günlerin verisini birleþtirdim. "thefts"" deðiþkeni olarak ekledim. Hýrsýzlýk yapýlan günleri 1 yapýlmayan günleri 0 olarak ekledim.
+#####Ardýþýk hýrsýzlýk yapýlan günleri giriþ metnine göre tek gün hýrsýzlýk yapýlmýþ sayabiliriz. Cünkü gece 2den sonra yapýlan hýrsýzlýklar bir sonraki gün'ün hanesine yazýlýyor.
+```{r}
+visitor$thefts<-0
+visitor[visitor$visit_date %in% dates$V1[-c(1,5,11,17)],]$thefts<-1
+visitor$thefts<-as.factor(visitor$thefts) 
+```
+
+##Feature Engineering :
+#####Haftanýn günlerine göre hýrsýzlýk oranýnda farklýlýk var mý? Hangi günlerde daha cok hýrsýzlýk yapýlmýþ bunlara baktým. Haftanýn gunlerini weekdays deðiþkeni olarak ekledim. En cok hýrsýzlýk pazar,pazartesi,persembe günlerinde yapýlmýþ
+```{r}
+visitor$weekDays<-as.factor(weekdays(as.Date(visitor$visit_date)))
+visitor$thefts<-as.factor(visitor$thefts)
+plot(x=as.factor(visitor$weekDays), y=as.factor(visitor$thefts))
+```
+
+#####Hangi gün kaç kiþi gelmiþ mekana yaklaþýk kalabalýk ayný mý? Yoksa haftanýn günlerine göre yogunluk deðiþiyor mu? Mekandaki gecelik toplam kiþi sayýsýný deðiþken olarak ekleyebiliriz. 
+```{r}
+#tapply(visitor$name ,visitor$visit_date,function(x) length(x))
+mean(tapply(visitor$name ,visitor$visit_date,function(x) length(x)))
+#[1] 213.635
+median(tapply(visitor$name ,visitor$visit_date,function(x) length(x)))
+#[1] 214
+hist(tapply(visitor$name ,visitor$visit_date,function(x) length(x)))
+
+#Günlere göre yogunluk 
+tapply(visitor$name ,visitor$weekDays,function(x) length(x))
+```
+
+
+
+
+##Model :
+####Modeli kurmadan önce kabaca kisilerin hýrsýzlýk yapýldýgý  ve yapýlmadýgý gunlerde klüpte bulunma sayýlarýný çýkardým.Toplam klübe gitme sayýlarýna oranladým. Sonuç olarak bazi insanlarýn gittiði herhangi bir günde hýrsýzlýk olmamýþ.
+```{r}
+#öncelikle kiþilerin hýrsýzlýk yapýlan gunlerde ve yapýlmayan günlerde bulunma sayýlarýný cýkardým. 
+#listVisitor tablosu oluþturdum.
+listVisitor<-table(visitor$name,visitor$thefts)
+
+#tabloyu rahat calýsabilmek için data.frame'e cevirdim.
+names<-data.frame(listVisitor)
+
+#kiþilerin isimlerini hýrsýzlýk olan gunlerde bulunma ve hýrsýzlýk olmayan gunlerde bulunma sayýlarýný cýkardým.
+den<-data.frame(names$Var1, listVisitor[,1],listVisitor[,2])
+
+#toplam gun bulunmayý "top" olarak ekledim
+den$top<-0
+den$top<-den$listVisitor...1.+den$listVisitor...2.
+
+#hýrsýzlýk yapýlan gunde bulunma/bulunmama sayýsýnýn toplam bulunma sayýsýna oranýný buldum.
+#Bunu bulmamdaki amacým klübü düzenli ziyaretcilerini aradan ayýklamak.
+den$prob<-den$listVisitor...1./den$top
+den$prob2<-den$listVisitor...2./den$top
+#sort(listVisitor[,1], decreasing=FALSE)
+hist(den$top)
+
+x<-den$prob2
+h<-hist(x,breaks = 10, col="red")
+xfit<-seq(min(x),max(x),length=40) 
+yfit<-dnorm(xfit,mean=mean(x),sd=sd(x)) 
+yfit <- yfit*diff(h$mids[1:2])*length(x) 
+lines(xfit, yfit, col="blue", lwd=2)
+
+unique(den[order(den$prob2,decreasing = TRUE),]$names.Var1[1:40])
+
+#burda goruyoruz ki oran 0.7eden kucuk olan kýsýmdakiler outlier.
+
+boxplot(den$listVisitor...1.)
+plot(den$listVisitor...2.,den$listVisitor...1.)
+abline(lm(den$listVisitor...2.~den$listVisitor...1.),lty=2)
+lines(lowess(den$listVisitor...2.,den$listVisitor...1.), col="blue")
+boxplot(den$listVisitor...2.~den$listVisitor...1.)
+
+mod<-lm(den$listVisitor...2.~den$listVisitor...1.)
+```
+
+##cooks distance ile anomaly'leri bularak da hýrsýzlarý ayýrt edebiliriz. 
+```{r}
+##cooksd ile anomaly'leri bularak da hýrsýzlarý ayýrt edebiliriz.
+cooksd <- cooks.distance(mod)
+
+plot(cooksd)
+abline(h = 4*mean(cooksd, na.rm=T), col="red")
+
+#Hýrsýz listesi
+den[cooksd>4*mean(cooksd, na.rm=T),]
+#Listeye bakarsak sadece 1 tane hiç hýrsýzlýk yapmayan var. Onu listeden çýkartabiliriz. Ya da en baþta modele hic dahil etmeyebilirdik. Ancak anomaly tespiti açýsýndan ne kadar cok datamýz olursa daha iyi sonuç almamýz daha olasý.
+
+```
+
+
+
+####Model: Kiþileri binary deðiþken olarak ekleyip output’a etkisini variable importance yöntemleriyle analiz etmektim. Önem sýrasý hýrsýzlarý sýralar diye düþündüm.Kesin hýrsýz olmayanlarýn kayýtlarýný cýkararak bir veri seti oluþturdum. Amacým kesin hýrsýz olmayanlarýn output'a etkisinin ön sýralarda çýkmamasýný saðlamaktý. Zaten hýrsýz olmayanlarýn sayýsý cogunlukta oldugu için output'a etkisi daha düþük çýkar diye düþündüm. 
+
+####Training ve testing set hazýrladým. Normalde belki daha saglýklý sonuclar almak adýna validation set oluþturulabilir. Bunun harici nfold yontemi de denenebilir. validation set oluþturmadým cunku kayýt sayýsý az oldugu için kayýp yaþamak istemedim. Eðitim ve test setini random ayýrmadým. Zaman serileri gibi ardýþýl öðrenme modelleri için kayan pencere yontemi  ya da ardýþýl ayýrma öneriliyor.[Machine Learning for Sequential Data A Review]. Kiþilerin de hýrsýzlýk yaparken bu ardýþýl durumdan etkilenmediðini gözlemledim. Pazartesi hýrsýzlýk yapan salý günü de gidebiliyor.
+```{r}
+#Burda hýrsýz olmaðýndan emin olduklarýmý çýkardým.
+notheftnamelist<-unique(den[den$prob2==0,]$names.Var1)
+theftvisitor<-visitor[!(visitor$name %in% notheftnamelist),]
+
+#Sonrasýnda "modelset" data.frame'i oluþturup butun kiþileri deðiþken olarak ekledim.
+modelset<-theftvisitor %>% dcast(visit_date ~ name)
+
+#"weekdays" ve "thefts" deðiþkenlerini de ekledim. 
+#Burada thefts zaten tahmin edilen deðer olarak kullanýlacak 
+modelset$weekDays<-as.factor(weekdays(as.Date(modelset$visit_date)))
+modelset$thefts<-0
+modelset[modelset$visit_date %in% dates$V1,]$thefts<-1
+
+#Faktöre çevirdim çünkü bir çok hem classificaiton hem de regression yapýlabilen modelde classification yapmak için tahmin deðiþkeninin(output deðiþkeninin) faktör'e cevirilmesi gerekiyor.
+modelset$thefts<-as.factor(modelset$thefts)
+set.seed(415)
+#sample <- sample(1:n, size = round(0.7*n), replace=FALSE)
+#train <- modelset[sample, ]
+#test  <- modelset[-sample, ]
+
+#Train test set ayýralým
+set.seed(415)
+train<-modelset[1:130,]
+#colnames(train)<-gsub(" ", "",colnames(train)) 
+#randomForest(thefts ~ . , method="class", data = train[,c(3:898)] ,importance=TRUE, 
+#                      ntree=2000)
+test<-modelset[131:200,]
+dim(train)
+```
+
+####Modeli hazýrladým. Model olarak Random Forest kullandým. Cok fazla tree kullanýlmadýgý surece overfitting ihtimali düþük olan bir model oldugu için ve bioinformatikte cok degiskenli modellerde  kullanýldýgý için öncelikli tercih ettim.N x M mikroarray matrixlerde Input deðiþken sayýsýnýn kayýt sayýsýndan daha buyuk olduðu durumlar için Random Forest en baþarýlý algoritmalardan biridir.[Random Forest for Bioinformatics]
+####Leo Breimann'a göre Random Forests yontemi degiskenler arasýndaki korelasyon düþük olduðu sürece çok zayýf sýnýflandýrýcýlarla çalýþabilme yeteneðine sahip.[RANDOM FORESTS] 
+####Random forest az sayýsa önemli deðiþkenle daha iyi modeller çýkarabilir. Bu noktada  importance'ý düþük olan deðiþkenleri çýkarýp tekrar model kurmak daha iyi sonuç verebilir.
+
+
+```{r}
+
+```
+
+#### Modelde AUC degerinin 0.5 ile 1 arasýnda bir deger olmasý gerekiyor. 
+```{r}
+library(h2o)
+h2o.init()
+#RF Modeli egitelim
+defaultModelRF <- h2o.randomForest(
+  x=c(2:897),
+  y = 898, 
+  training_frame = as.h2o(train),
+  ntrees = 100,
+  nfolds = 2 ,
+  seed = 43453
+)
+perf<-h2o.performance(defaultModelRF, as.h2o(train[,c(2:898)]))
+h2o.auc(perf)
+
+```
+
+####VariableImportance
+```{r}
+#Faktor analizine bakalým
+my_varimp <- h2o.varimp(defaultModelRF)
+my_varimp$variable[1:21]
+my_varimp$percentage[1:21]
+```
+
+####Tahmin 
+```{r}
+#Test setini tahmin ettirelim
+predict.rforest<-as.data.frame(h2o.predict(defaultModelRF, as.h2o(test[,c(2:897)]),seed = 43453))
+perf<-h2o.performance(defaultModelRF, as.h2o(test))
+h2o.auc(perf)
+perf
+#tahmin sonuçlarý actual degerler tahmin edilen degerler
+table(test$thefts,as.data.frame(predict.rforest)$predict)
+
+library(ModelMetrics)
+mse(test$thefts, predict.rforest$predict)
+#confusionMatrix(test$thefts, predict.rforest$predict, cutoff = 0.1)
+```
+
+
+#Son:
+####Üsteki model harici kiþileri gidilen günlerdeki hýrsýzlýk sýklýgýna göre cluster yontemleriyle sýnýflandýrmaya çalýþmak da hýrsýzlarý bulmak için kullanýlabilirdi. Ancak bu yöntemle sadece sýnýflandýrma yapabilirdik. Ranking yapamayabilirdik.Diðer bi model olarak gittiði herhangi bir gün hýrsýzlýk yapmayan kiþileri hýrsýz deðil kabul ederek bir training set oluþturup bunun üzerinden kiþilerin hýrsýz olup olmadýðýný tahmin etmeye çalýþabilirdik. Ancak bu yöntemle de sadece 70 civari kiþinin bilgisi elimizde olup 900 kiþiyi tahmin ettirmeye calýsacagýmýz için çok iyi bir performans alamayabilirdik.
